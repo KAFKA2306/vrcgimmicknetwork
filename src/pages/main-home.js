@@ -1,144 +1,169 @@
-import wixData from 'wix-data';
+import wixData from 'wix-data'; // GimmickService を使うため、直接wixDataへの依存は減らせるが、互換性のため残す
 import wixLocation from 'wix-location';
-import { GimmickService } from 'backend/gimmick-service';
-import { highlight } from 'public/scripts/code-utils'; // Assuming this exists
-import { renderGimmickCard } from 'public/scripts/ui-components'; // Assuming this exists
+import { GimmickService } from 'backend/gimmick-service'; // バックエンドサービス
+import { renderGimmickCard, renderPagination, setupBackToTopButton } from 'public/scripts/ui-components'; // UIコンポーネント関数
+
+const ITEMS_PER_PAGE = 10;
 
 $w.onReady(function () {
-    // Set page title
-    $w("#pageTitle").text = "VRCギミック技術情報プラットフォーム";
+    $w("#pageTitle").text = "VRCギミック技術情報";
 
-    // Load and display latest gimmicks
-    loadLatestGimmicks();
-
-    // Initialize category filter
+    loadGimmicksWithPagination(1);
     initializeCategoryFilter();
-
-    // Initialize search function
     initializeSearchFunction();
+    setupBackToTopButton();
+
+    $w("#noResultsMessage").collapse();
 });
 
-// Load and display the latest gimmicks
-async function loadLatestGimmicks() {
+async function loadGimmicksWithPagination(pageNumber, category = null, keyword = null) {
     try {
-        const results = await GimmickService.getGimmicks({ limit: 10 });
+        // GimmickService経由でデータを取得
+        const options = {
+            limit: ITEMS_PER_PAGE,
+            skip: (pageNumber - 1) * ITEMS_PER_PAGE,
+            category: (category && category !== "all") ? category : null,
+            // keyword は GimmickService.searchGimmicks が内部で処理するので、ここでは直接渡さない
+        };
+
+        let results;
+        if (keyword) {
+            results = await GimmickService.searchGimmicks(keyword, options);
+        } else {
+            results = await GimmickService.getGimmicks(options); // カテゴリフィルタはgetGimmicks内で対応も可、または専用関数
+            // もしGimmickService.getGimmicksがカテゴリフィルタをサポートしないなら、別途フィルタリングロジックをここかServiceに追加
+             if (options.category) { // ここで暫定的にフィルタリング
+                const allItems = await GimmickService.getGimmicks({ limit: 1000 }); // 全件取得は非効率なので注意
+                const filteredItems = allItems.items.filter(item => 
+                    item.gimmickCategory && (Array.isArray(item.gimmickCategory) ? item.gimmickCategory.includes(options.category) : item.gimmickCategory === options.category)
+                );
+                results = { // results オブジェクトの構造を模倣
+                    items: filteredItems.slice(options.skip, options.skip + options.limit),
+                    totalCount: filteredItems.length // 正確な総数は別途取得が必要
+                };
+                // 注: 上記のカテゴリフィルタは非効率です。GimmickService側で対応するのが望ましい。
+            }
+        }
+
+
+        const totalPages = Math.ceil((results.totalCount || results.items.length) / ITEMS_PER_PAGE); // totalCountが返される前提
+
         if (results.items.length > 0) {
             displayGimmickItems(results.items);
+            const paginationHtml = renderPagination(pageNumber, totalPages, wixLocation.baseUrl + wixLocation.path.join('/')); // URL生成を修正
+            if ($w("#paginationContainer").html !== undefined) { // WixのHTMLコンポーネントの場合
+                 $w("#paginationContainer").html = paginationHtml;
+            } else if ($w("#paginationContainer").text !== undefined) { // テキストボックスの場合
+                 $w("#paginationContainer").text = "ページネーション非対応コンテナです"; // 適切な表示方法に変更
+            }
             $w("#noResultsMessage").collapse();
+            $w("#paginationContainer").expand();
         } else {
             $w("#gimmickRepeater").collapse();
+            $w("#paginationContainer").collapse();
+            $w("#noResultsMessage").text = keyword ? `「${keyword}」に一致する情報は見つかりませんでした。` : "表示できるギミック情報がありません。";
             $w("#noResultsMessage").expand();
-            $w("#noResultsMessage").text = "表示できるギミック情報がありません。";
         }
     } catch (error) {
-        console.error("Error loading gimmicks:", error);
+        console.error("ギミック情報の読み込みに失敗しました:", error);
         showErrorMessage("データの読み込みに失敗しました。");
     }
 }
 
-// Initialize category filter
-function initializeCategoryFilter() {
-    // Load categories and populate the dropdown
-    loadCategories();
-
-    // Handle category selection
-    $w("#categoryDropdown").onChange(() => {
-        const selectedCategory = $w("#categoryDropdown").value;
-        if (!selectedCategory || selectedCategory === "all") {
-            loadLatestGimmicks();
-        } else {
-            filterByCategory(selectedCategory);
-        }
-    });
-}
-
-// Load categories and populate the dropdown
-async function loadCategories() {
+async function initializeCategoryFilter() {
+    const categoryDropdown = $w("#categoryDropdown");
+    if (!categoryDropdown) {
+        console.warn("要素 #categoryDropdown がページに見つかりません。");
+        return;
+    }
     try {
         const categories = await GimmickService.getCategories();
         const options = [{ label: "すべてのカテゴリ", value: "all" }];
-        categories.forEach(category => {
-            options.push({ label: category, value: category });
+        categories.sort().forEach(cat => {
+            options.push({ label: cat, value: cat });
         });
-        $w("#categoryDropdown").options = options;
+        categoryDropdown.options = options;
+
+        categoryDropdown.onChange(() => {
+            const selectedCategory = categoryDropdown.value;
+            const currentKeyword = $w("#searchInput").value || null;
+            loadGimmicksWithPagination(1, selectedCategory, currentKeyword);
+        });
     } catch (error) {
-        console.error("Error loading categories:", error);
+        console.error("カテゴリの読み込みまたは設定に失敗しました:", error);
     }
 }
 
-// Filter gimmicks by category
-async function filterByCategory(category) {
-    try {
-        const results = await GimmickService.searchGimmicks(null, { category: category, limit: 10 });
-        if (results.items.length > 0) {
-            displayGimmickItems(results.items);
-            $w("#noResultsMessage").collapse();
-        } else {
-            $w("#gimmickRepeater").collapse();
-            $w("#noResultsMessage").expand();
-            $w("#noResultsMessage").text = `「${category}」に該当するギミック情報はありません。`;
-        }
-    } catch (error) {
-        console.error(`Error filtering by category "${category}":`, error);
-        showErrorMessage("フィルタリング中にエラーが発生しました。");
-    }
-}
-
-// Initialize search function
 function initializeSearchFunction() {
-    // Handle search button click
-    $w("#searchButton").onClick(() => {
-        const keyword = $w("#searchInput").value;
-        if (keyword && keyword.trim() !== "") {
-            searchGimmicks(keyword.trim());
-        } else {
-            loadLatestGimmicks();
-        }
-    });
-
-    // Handle Enter key press in the search input
-    $w("#searchInput").onKeyPress((event) => {
-        if (event.key === "Enter") {
-            const keyword = $w("#searchInput").value;
-            if (keyword && keyword.trim() !== "") {
-                searchGimmicks(keyword.trim());
-            }
-        }
-    });
-}
-
-// Search for gimmicks
-async function searchGimmicks(keyword) {
-    try {
-        const results = await GimmickService.searchGimmicks(keyword, { limit: 10 });
-        if (results.items.length > 0) {
-            displayGimmickItems(results.items);
-            $w("#noResultsMessage").collapse();
-        } else {
-            $w("#gimmickRepeater").collapse();
-            $w("#noResultsMessage").expand();
-            $w("#noResultsMessage").text = `「${keyword}」に一致する情報は見つかりませんでした。`;
-        }
-    } catch (error) {
-        console.error(`Error searching for "${keyword}":`, error);
-        showErrorMessage("検索中にエラーが発生しました。");
+    const searchButton = $w("#searchButton");
+    const searchInput = $w("#searchInput");
+    if (!searchButton || !searchInput) {
+        console.warn("検索関連要素が見つかりません。");
+        return;
     }
+    const performSearch = () => {
+        const keyword = searchInput.value.trim();
+        const currentCategory = $w("#categoryDropdown").value || "all";
+        loadGimmicksWithPagination(1, currentCategory, keyword || null);
+    };
+    searchButton.onClick(performSearch);
+    searchInput.onKeyPress((event) => {
+        if (event.key === "Enter") {
+            performSearch();
+        }
+    });
 }
 
-// Display gimmick items in the repeater
 function displayGimmickItems(items) {
     const repeater = $w("#gimmickRepeater");
-    repeater.data = items;
-    repeater.expand();
+    if (!repeater) {
+        console.warn("要素 #gimmickRepeater がページに見つかりません。");
+        return;
+    }
+    repeater.data = items.map(item => {
+        // ui-components.js の renderGimmickCard は、itemData全体とオプションを引数に取ることを想定
+        // また、HTML文字列を返すことを想定
+        const cardHtml = renderGimmickCard(item, {
+            showImage: true,
+            showCategory: true,
+            showDifficulty: true,
+            showDate: true,
+            truncateTitle: 50,
+            truncateContent: 100
+        });
+        return {
+            _id: item._id,
+            gimmickCardHtml: cardHtml // リピーター内のHTMLコンポーネントにバインドするプロパティ名
+        };
+    });
 
     repeater.onItemReady(($item, itemData) => {
-        renderGimmickCard($item, itemData); // Assuming this function exists in ui-components.js
+        // HTMLコンポーネントに生成されたHTMLを設定
+        const htmlComponent = $item("#gimmickCardHtml"); // リピーター内のHTMLコンポーネントのID
+        if (htmlComponent) {
+            htmlComponent.html = itemData.gimmickCardHtml;
+        }
+
+        // カード全体へのクリックイベント設定
+        const cardContainer = $item("#gimmickCardContainer"); // リピーター内のカード全体のコンテナID
+        if (cardContainer) {
+            cardContainer.onClick(() => {
+                wixLocation.to(`/gimmick-info/${itemData._id}`);
+            });
+        }
     });
+    repeater.expand();
 }
 
-// Show error message
 function showErrorMessage(message) {
-    $w("#gimmickRepeater").collapse();
-    $w("#noResultsMessage").text = message;
-    $w("#noResultsMessage").expand();
+    const repeater = $w("#gimmickRepeater");
+    const pagination = $w("#paginationContainer");
+    const noResultsMsg = $w("#noResultsMessage");
+
+    if (repeater) repeater.collapse();
+    if (pagination) pagination.collapse();
+    if (noResultsMsg) {
+        noResultsMsg.text = message;
+        noResultsMsg.expand();
+    }
 }

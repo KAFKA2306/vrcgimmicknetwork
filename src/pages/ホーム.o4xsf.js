@@ -5,7 +5,7 @@ import { highlight } from 'public/scripts/code-utils';
 
 $w.onReady(function () {
     // ページタイトルと初期コンテンツの設定
-    $w("#pageTitle").text = "VRCギミック技術情報プラットフォーム";
+    $w("#pageTitle").text = "VRCギミック技術情報プラットフォームtest";
     
     // 最新ギミック情報の読み込み
     loadLatestGimmicks();
