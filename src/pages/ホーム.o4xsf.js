@@ -1,232 +1,177 @@
 import wixData from 'wix-data';
 import wixLocation from 'wix-location';
-import { GimmickService } from 'backend/gimmick-service';
-import { highlight } from 'public/scripts/code-utils';
+import { GimmickService } from 'backend/gimmick-service'; // バックエンドサービス
+import { renderGimmickCard, renderPagination, setupBackToTopButton } from 'public/scripts/ui-components'; // UIコンポーネント関数
+
+const ITEMS_PER_PAGE = 10;
 
 $w.onReady(function () {
-    // ページタイトルと初期コンテンツの設定
-    $w("#pageTitle").text = "VRCギミック技術情報プラットフォームtest";
-    
-    // 最新ギミック情報の読み込み
-    loadLatestGimmicks();
-    
-    // カテゴリフィルター初期化
+    const pageTitle = $w("#pageTitle");
+    const noResultsMessage = $w("#noResultsMessage");
+    const categoryDropdown = $w("#categoryDropdown");
+    const searchButton = $w("#searchButton");
+    const searchInput = $w("#searchInput");
+    const gimmickRepeater = $w("#gimmickRepeater");
+    const paginationContainer = $w("#paginationContainer");
+
+    pageTitle.text = "VRCギミック技術情報";
+
+    loadGimmicksWithPagination(1);
     initializeCategoryFilter();
-    
-    // 検索機能初期化
     initializeSearchFunction();
+    setupBackToTopButton();
+
+    noResultsMessage.collapse();
 });
 
-// 最新のギミック情報を読み込んで表示
-async function loadLatestGimmicks() {
+async function loadGimmicksWithPagination(pageNumber, category = null, keyword = null) {
     try {
-        const results = await wixData.query("GimmickInfo")
-            .descending("_createdDate")
-            .limit(10)  // 仕様書5.2.1に基づき10件表示
-            .find();
-            
+        // GimmickService経由でデータを取得
+        const options = {
+            limit: ITEMS_PER_PAGE,
+            skip: (pageNumber - 1) * ITEMS_PER_PAGE,
+            category: (category && category !== "all") ? category : null,
+            // keyword は GimmickService.searchGimmicks が内部で処理するので、ここでは直接渡さない
+        };
+
+        let results;
+        if (keyword) {
+            results = await GimmickService.searchGimmicks(keyword, options);
+        } else {
+            results = await GimmickService.getGimmicks(options); // カテゴリフィルタはgetGimmicks内で対応も可、または専用関数
+            // もしGimmickService.getGimmicksがカテゴリフィルタをサポートしないなら、別途フィルタリングロジックをここかServiceに追加
+             if (options.category) { // ここで暫定的にフィルタリング
+                const allItems = await GimmickService.getGimmicks({ limit: 1000 }); // 全件取得は非効率なので注意
+                const filteredItems = allItems.items.filter(item => 
+                    item.gimmickCategory && (Array.isArray(item.gimmickCategory) ? item.gimmickCategory.includes(options.category) : item.gimmickCategory === options.category)
+                );
+                results = { // results オブジェクトの構造を模倣
+                    items: filteredItems.slice(options.skip, options.skip + options.limit),
+                    totalCount: filteredItems.length // 正確な総数は別途取得が必要
+                };
+                // 注: 上記のカテゴリフィルタは非効率です。GimmickService側で対応するのが望ましい。
+            }
+        }
+
+
+        const totalPages = Math.ceil((results.totalCount || results.items.length) / ITEMS_PER_PAGE); // totalCountが返される前提
+
         if (results.items.length > 0) {
             displayGimmickItems(results.items);
-            $w("#noResultsMessage").collapse();
+            const paginationHtml = renderPagination(pageNumber, totalPages, wixLocation.baseUrl + wixLocation.path.join('/')); // URL生成を修正
+            if (paginationContainer.html !== undefined) { // WixのHTMLコンポーネントの場合
+                 paginationContainer.html = paginationHtml;
+            } else if (paginationContainer.text !== undefined) { // テキストボックスの場合
+                 paginationContainer.text = "ページネーション非対応コンテナです"; // 適切な表示方法に変更
+            }
+            noResultsMessage.collapse();
+            paginationContainer.expand();
         } else {
-            $w("#gimmickRepeater").collapse();
-            $w("#noResultsMessage").expand();
-            $w("#noResultsMessage").text = "表示できるギミック情報がありません。";
+            gimmickRepeater.collapse();
+            paginationContainer.collapse();
+            noResultsMessage.text = keyword ? `「${keyword}」に一致する情報は見つかりませんでした。` : "表示できるギミック情報がありません。";
+            noResultsMessage.expand();
         }
     } catch (error) {
         console.error("ギミック情報の読み込みに失敗しました:", error);
-        showErrorMessage("データの読み込みに失敗しました。時間をおいて再度お試しください。");
+        showErrorMessage("データの読み込みに失敗しました。");
     }
 }
 
-// カテゴリフィルター機能
-function initializeCategoryFilter() {
-    // カテゴリリストを動的に取得
-    loadCategories();
-    
-    // カテゴリ選択イベント
-    $w("#categoryDropdown").onChange(() => {
-        const selectedCategory = $w("#categoryDropdown").value;
-        
-        if (!selectedCategory || selectedCategory === "all") {
-            loadLatestGimmicks();
-        } else {
-            filterByCategory(selectedCategory);
-        }
-    });
-}
-
-// カテゴリ一覧取得とドロップダウン設定
-async function loadCategories() {
+async function initializeCategoryFilter() {
+    const categoryDropdown = $w("#categoryDropdown");
+    if (!categoryDropdown) {
+        console.warn("要素 #categoryDropdown がページに見つかりません。");
+        return;
+    }
     try {
-        // GimmickInfoコレクションから一意のカテゴリを取得
-        const results = await wixData.query("GimmickInfo")
-            .limit(1000)
-            .find();
-            
-        // 一意のカテゴリセット作成
-        const categories = new Set();
-        
-        results.items.forEach(item => {
-            if (item.gimmickCategory) {
-                if (Array.isArray(item.gimmickCategory)) {
-                    item.gimmickCategory.forEach(cat => categories.add(cat));
-                } else {
-                    categories.add(item.gimmickCategory);
-                }
-            }
+        const categories = await GimmickService.getCategories();
+        const options = [{ label: "すべてのカテゴリ", value: "all" }];
+        categories.sort().forEach(cat => {
+            options.push({ label: cat, value: cat });
         });
-        
-        // ドロップダウンオプション作成
-        const options = [
-            { label: "すべてのカテゴリ", value: "all" }
-        ];
-        
-        categories.forEach(category => {
-            options.push({ label: category, value: category });
+        categoryDropdown.options = options;
+
+        categoryDropdown.onChange(() => {
+            const selectedCategory = categoryDropdown.value;
+            const currentKeyword = $w("#searchInput").value || null;
+            loadGimmicksWithPagination(1, selectedCategory, currentKeyword);
         });
-        
-        // ドロップダウンに設定
-        $w("#categoryDropdown").options = options;
-        
     } catch (error) {
-        console.error("カテゴリの読み込みに失敗しました:", error);
+        console.error("カテゴリの読み込みまたは設定に失敗しました:", error);
     }
 }
 
-// カテゴリでフィルタリング
-async function filterByCategory(category) {
-    try {
-        const results = await wixData.query("GimmickInfo")
-            .hasSome("gimmickCategory", [category])
-            .descending("_createdDate")
-            .limit(10)
-            .find();
-            
-        if (results.items.length > 0) {
-            displayGimmickItems(results.items);
-            $w("#noResultsMessage").collapse();
-        } else {
-            $w("#gimmickRepeater").collapse();
-            $w("#noResultsMessage").expand();
-            $w("#noResultsMessage").text = `「${category}」に該当するギミック情報はありません。`;
-        }
-    } catch (error) {
-        console.error(`カテゴリ「${category}」でのフィルタリングに失敗しました:`, error);
-        showErrorMessage("フィルタリング中にエラーが発生しました。");
-    }
-}
-
-// 検索機能の初期化
 function initializeSearchFunction() {
-    // 検索ボタンクリックイベント
-    $w("#searchButton").onClick(() => {
-        const keyword = $w("#searchInput").value;
-        if (keyword && keyword.trim() !== "") {
-            searchGimmicks(keyword.trim());
-        } else {
-            loadLatestGimmicks();
-        }
-    });
-    
-    // Enterキーでの検索
-    $w("#searchInput").onKeyPress((event) => {
-        if (event.key === "Enter") {
-            const keyword = $w("#searchInput").value;
-            if (keyword && keyword.trim() !== "") {
-                searchGimmicks(keyword.trim());
-            }
-        }
-    });
-}
-
-// キーワード検索
-async function searchGimmicks(keyword) {
-    try {
-        const results = await wixData.query("GimmickInfo")
-            .contains("title", keyword)
-            .or(wixData.query("GimmickInfo").contains("content", keyword))
-            .descending("_createdDate")
-            .limit(10)
-            .find();
-            
-        if (results.items.length > 0) {
-            displayGimmickItems(results.items);
-            $w("#noResultsMessage").collapse();
-        } else {
-            $w("#gimmickRepeater").collapse();
-            $w("#noResultsMessage").expand();
-            $w("#noResultsMessage").text = `「${keyword}」に一致する情報は見つかりませんでした。`;
-        }
-    } catch (error) {
-        console.error(`「${keyword}」での検索に失敗しました:`, error);
-        showErrorMessage("検索中にエラーが発生しました。");
+    const searchButton = $w("#searchButton");
+    const searchInput = $w("#searchInput");
+    if (!searchButton || !searchInput) {
+        console.warn("検索関連要素が見つかりません。");
+        return;
     }
+    const performSearch = () => {
+        const keyword = searchInput.value.trim();
+        const currentCategory = $w("#categoryDropdown").value || "all";
+        loadGimmicksWithPagination(1, currentCategory, keyword || null);
+    };
+    searchButton.onClick(performSearch);
+    searchInput.onKeyPress((event) => {
+        if (event.key === "Enter") {
+            performSearch();
+        }
+    });
 }
 
-// ギミック情報をリピーターに表示
 function displayGimmickItems(items) {
     const repeater = $w("#gimmickRepeater");
-    
-    repeater.data = items;
-    repeater.expand();
-    
-    // リピーター内の各アイテムをカスタマイズ
-    repeater.onItemReady(($item, itemData) => {
-        // タイトル設定
-        $item("#itemTitle").text = itemData.title;
-        
-        // 詳細ページへのリンク設定
-        $item("#itemLink").onClick(() => {
-            wixLocation.to(`/gimmick-info/${itemData._id}`);
+    if (!repeater) {
+        console.warn("要素 #gimmickRepeater がページに見つかりません。");
+        return;
+    }
+    repeater.data = items.map(item => {
+        // ui-components.js の renderGimmickCard は、itemData全体とオプションを引数に取ることを想定
+        // また、HTML文字列を返すことを想定
+        const cardHtml = renderGimmickCard(item, {
+            showImage: true,
+            showCategory: true,
+            showDifficulty: true,
+            showDate: true,
+            truncateTitle: 50,
+            truncateContent: 100
         });
-        
-        // アイキャッチ画像設定
-        if (itemData.mainImage) {
-            $item("#itemImage").src = itemData.mainImage;
-            $item("#itemImage").alt = itemData.title;
-        } else {
-            // デフォルト画像設定
-            $item("#itemImage").src = "/images/default-gimmick.webp";
+        return {
+            _id: item._id,
+            gimmickCardHtml: cardHtml // リピーター内のHTMLコンポーネントにバインドするプロパティ名
+        };
+    });
+
+    repeater.onItemReady(($item, itemData) => {
+        // HTMLコンポーネントに生成されたHTMLを設定
+        const htmlComponent = $item("#gimmickCardHtml"); // リピーター内のHTMLコンポーネントのID
+        if (htmlComponent) {
+            htmlComponent.html = itemData.gimmickCardHtml;
         }
-        
-        // カテゴリ表示
-        if (itemData.gimmickCategory) {
-            let categoryText = Array.isArray(itemData.gimmickCategory) 
-                ? itemData.gimmickCategory.join(", ") 
-                : itemData.gimmickCategory;
-            $item("#itemCategory").text = `カテゴリ: ${categoryText}`;
-        }
-        
-        // 難易度表示と色設定
-        if (itemData.difficulty) {
-            $item("#itemDifficulty").text = `難易度: ${itemData.difficulty}`;
-            
-            // 難易度に応じた色設定
-            switch(itemData.difficulty) {
-                case "初心者向け":
-                    $item("#itemDifficulty").style.color = "#4CAF50"; // 緑
-                    break;
-                case "中級者向け":
-                    $item("#itemDifficulty").style.color = "#FFC107"; // 黄
-                    break;
-                case "上級者向け":
-                    $item("#itemDifficulty").style.color = "#F44336"; // 赤
-                    break;
-            }
-        }
-        
-        // 投稿日表示
-        if (itemData._createdDate) {
-            const date = new Date(itemData._createdDate);
-            $item("#itemDate").text = `投稿日: ${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+
+        // カード全体へのクリックイベント設定
+        const cardContainer = $item("#gimmickCardContainer"); // リピーター内のカード全体のコンテナID
+        if (cardContainer) {
+            cardContainer.onClick(() => {
+                wixLocation.to(`/gimmick-info/${itemData._id}`);
+            });
         }
     });
+    repeater.expand();
 }
 
-// エラーメッセージ表示
 function showErrorMessage(message) {
-    $w("#gimmickRepeater").collapse();
-    $w("#noResultsMessage").text = message;
-    $w("#noResultsMessage").expand();
+    const noResultsMsg = $w("#noResultsMessage");
+    const repeater = $w("#gimmickRepeater");
+    const pagination = $w("#paginationContainer");
+
+    if (repeater) repeater.collapse();
+    if (pagination) pagination.collapse();
+    if (noResultsMsg) {
+        noResultsMsg.text = message;
+        noResultsMsg.expand();
+    }
 }
