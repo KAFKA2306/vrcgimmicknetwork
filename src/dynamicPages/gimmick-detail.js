@@ -1,4 +1,3 @@
-import wixData from 'wix-data';
 import { GimmickService } from 'backend/gimmick-service';
 import { highlight } from 'public/scripts/code-utils';
 
