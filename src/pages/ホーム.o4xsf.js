@@ -1,4 +1,3 @@
-import wixData from 'wix-data';
 import wixLocation from 'wix-location';
 import { GimmickService } from 'backend/gimmick-service'; // バックエンドサービス
 import { renderGimmickCard, renderPagination, setupBackToTopButton } from 'public/scripts/ui-components'; // UIコンポーネント関数
@@ -8,11 +7,6 @@ const ITEMS_PER_PAGE = 10;
 $w.onReady(function () {
     const pageTitle = $w("#pageTitle");
     const noResultsMessage = $w("#noResultsMessage");
-    const categoryDropdown = $w("#categoryDropdown");
-    const searchButton = $w("#searchButton");
-    const searchInput = $w("#searchInput");
-    const gimmickRepeater = $w("#gimmickRepeater");
-    const paginationContainer = $w("#paginationContainer");
 
     pageTitle.text = "VRCギミック技術情報";
 
