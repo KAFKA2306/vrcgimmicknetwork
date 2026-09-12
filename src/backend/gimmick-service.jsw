@@ -1,28 +1,17 @@
 import wixData from 'wix-data';
 import { ContentValidator } from './content-validator';
 import { optimizeImage } from './image-optimizer';
+import { createGimmickSubmission } from './gimmick-submission';
 
 // GimmickService: ギミック情報に関する操作を提供するサービス
 export const GimmickService = {
     // 新規ギミック情報作成
     createGimmick: async (data) => {
-        // バリデーション
-        const validation = ContentValidator.validateGimmick(data);
-        if (!validation.valid) {
-            throw new Error(validation.errors.join(', '));
-        }
-        
-        // 画像最適化
-        if (data.mainImage) {
-            data.mainImage = await optimizeImage(data.mainImage, {
-                format: 'webp',
-                quality: 80,
-                resize: { width: 1200, height: 900 }
-            });
-        }
-        
-        // データ挿入
-        return wixData.insert("GimmickInfo", data);
+        return createGimmickSubmission(data, {
+            validateGimmick: ContentValidator.validateGimmick,
+            optimizeImage,
+            insert: (collection, record) => wixData.insert(collection, record)
+        });
     },
     
     // ギミック情報取得
