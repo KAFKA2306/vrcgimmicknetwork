@@ -1,4 +1,4 @@
-export async function prepareGimmick(data, { validate, prepareImage }) {
+export async function createPreparedGimmick(data, { validate, prepareImage, insert }) {
     const validation = validate(data);
     if (!validation.valid) {
         throw new Error(validation.errors.join(', '));
@@ -12,5 +12,5 @@ export async function prepareGimmick(data, { validate, prepareImage }) {
             resize: { width: 1200, height: 900 }
         });
     }
-    return prepared;
+    return insert(prepared);
 }
