@@ -1,16 +1,14 @@
 import wixData from 'wix-data';
 import { ContentValidator } from './content-validator';
 import { optimizeImage } from './image-optimizer';
-import { prepareGimmick } from './gimmick-preparation';
+import { createPreparedGimmick } from './gimmick-preparation';
 
 export const GimmickService = {
-    createGimmick: async (data) => {
-        const prepared = await prepareGimmick(data, {
-            validate: ContentValidator.validateGimmick,
-            prepareImage: optimizeImage
-        });
-        return wixData.insert('GimmickInfo', prepared);
-    },
+    createGimmick: async (data) => createPreparedGimmick(data, {
+        validate: ContentValidator.validateGimmick,
+        prepareImage: optimizeImage,
+        insert: (prepared) => wixData.insert('GimmickInfo', prepared)
+    }),
 
     getGimmick: async (id) => wixData.get('GimmickInfo', id),
 
