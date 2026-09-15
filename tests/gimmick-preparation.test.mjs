@@ -1,39 +1,60 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { prepareGimmick } from '../src/backend/gimmick-preparation.js';
+import { createPreparedGimmick } from '../src/backend/gimmick-preparation.js';
 
 const valid = () => ({ valid: true, errors: [] });
 const invalid = () => ({ valid: false, errors: ['invalid'] });
 
-test('no image needs no preparation', async () => {
-  let calls = 0;
-  const result = await prepareGimmick({ title: 'x' }, { validate: valid, prepareImage: async () => { calls += 1; } });
-  assert.equal(calls, 0);
-  assert.equal(result.title, 'x');
+function recorder() {
+  const records = [];
+  return { records, insert: async (value) => { records.push(value); return value; } };
+}
+
+test('valid content without image inserts once without preparation', async () => {
+  let preparations = 0;
+  const db = recorder();
+  await createPreparedGimmick({ title: 'x' }, {
+    validate: valid,
+    prepareImage: async () => { preparations += 1; },
+    insert: db.insert
+  });
+  assert.equal(preparations, 0);
+  assert.equal(db.records.length, 1);
 });
 
-test('successful preparation uses prepared URL and canonical options', async () => {
+test('successful image preparation inserts prepared Wix media URL once', async () => {
   let options;
-  const result = await prepareGimmick({ title: 'x', mainImage: 'https://example.test/a.jpg' }, {
+  const db = recorder();
+  await createPreparedGimmick({ title: 'x', mainImage: 'https://example.test/a.jpg' }, {
     validate: valid,
-    prepareImage: async (_url, value) => { options = value; return 'https://media.wix.com/a.webp?f=webp'; }
+    prepareImage: async (_url, value) => { options = value; return 'https://media.wix.com/a.webp?f=webp&q=80&w=1200&h=900'; },
+    insert: db.insert
   });
-  assert.match(result.mainImage, /media\.wix\.com/);
+  assert.equal(db.records.length, 1);
+  assert.match(db.records[0].mainImage, /media\.wix\.com/);
   assert.deepEqual(options, { format: 'webp', quality: 80, resize: { width: 1200, height: 900 } });
 });
 
-test('preparation failure rejects before a record can be returned for insert', async () => {
-  await assert.rejects(() => prepareGimmick({ title: 'x', mainImage: 'bad' }, {
+test('repeated image preparation failure remains explicit with zero inserts', async () => {
+  const db = recorder();
+  const dependencies = {
     validate: valid,
-    prepareImage: async () => { throw new Error('upload failed'); }
-  }), /upload failed/);
+    prepareImage: async () => { throw new Error('upload failed'); },
+    insert: db.insert
+  };
+  await assert.rejects(() => createPreparedGimmick({ title: 'x', mainImage: 'bad' }, dependencies), /upload failed/);
+  await assert.rejects(() => createPreparedGimmick({ title: 'x', mainImage: 'bad' }, dependencies), /upload failed/);
+  assert.equal(db.records.length, 0);
 });
 
-test('invalid content never prepares image', async () => {
-  let calls = 0;
-  await assert.rejects(() => prepareGimmick({ title: '', mainImage: 'x' }, {
+test('invalid content performs neither image preparation nor insert', async () => {
+  let preparations = 0;
+  const db = recorder();
+  await assert.rejects(() => createPreparedGimmick({ title: '', mainImage: 'x' }, {
     validate: invalid,
-    prepareImage: async () => { calls += 1; }
+    prepareImage: async () => { preparations += 1; },
+    insert: db.insert
   }), /invalid/);
-  assert.equal(calls, 0);
+  assert.equal(preparations, 0);
+  assert.equal(db.records.length, 0);
 });
