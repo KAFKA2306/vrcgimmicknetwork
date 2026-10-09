@@ -19,6 +19,8 @@ jobs:
           package-manager-cache: false
       - name: Install lint dependencies without Wix postinstall
         run: npm install --ignore-scripts --no-package-lock
+      - name: Test
+        run: npm test
       - name: Lint
         run: npm run lint
       - name: Verify clean checkout
