@@ -23,7 +23,5 @@ jobs:
         run: npm test
       - name: Lint
         run: npm run lint
-      - name: Inquiry contract tests
-        run: npm test
       - name: Verify clean checkout
         run: git diff --exit-code
